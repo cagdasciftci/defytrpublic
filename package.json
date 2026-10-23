@@ -1,0 +1,35 @@
+{
+  "name": "wallet-ownership-proof",
+  "version": "0.1.0-dev",
+  "description": "Prove and record that a customer controls a self-hosted wallet before a Travel Rule transfer (EIP-4361/EIP-191, BIP-322).",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.js",
+    "./testing": "./src/storeConformance.js"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cagdasciftci/defytrpublic.git"
+  },
+  "keywords": [
+    "travel-rule",
+    "self-hosted-wallet",
+    "unhosted-wallet",
+    "eip-4361",
+    "siwe",
+    "eip-191",
+    "bip-322",
+    "compliance"
+  ],
+  "dependencies": {
+    "@noble/curves": "1.9.7",
+    "@noble/hashes": "1.8.0"
+  }
+}

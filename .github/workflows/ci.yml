@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Install
+        run: |
+          [ -f package-lock.json ] || { echo "::error title=lockfile::package-lock.json missing; the Lockfile workflow generates it"; exit 1; }
+          npm ci --no-audit --no-fund
+          echo "::notice title=deps::$(npm ls --omit=dev --depth=0 --parseable --long 2>/dev/null | sed 's#.*/node_modules/##' | tail -n +2 | tr '\n' ' ')"
+      - run: npm audit --omit=dev
+      - name: Test
+        run: node --test --test-reporter=tap --test-reporter-destination=test.tap --test-reporter=spec --test-reporter-destination=stdout
+      # Raw logs are not readable from every client; surface results as check-run annotations.
+      - name: Report results as annotations
+        if: always()
+        run: |
+          [ -f test.tap ] || { echo "::error::no TAP output"; exit 0; }
+          echo "::notice title=tests::$(grep -E '^# (tests|pass|fail|skipped)' test.tap | tr '\n' ' ')"
+          awk '/^ *not ok /{name=$0; getline; while ($0 !~ /error:|message:/ && $0 !~ /^ *(ok|not ok) /) { if (!getline) break } ; print "::error title=failed::" name " | " $0}' test.tap

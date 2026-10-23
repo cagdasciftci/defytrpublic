@@ -1,0 +1,22 @@
+/** Typed rejection codes. Every failed verification maps to exactly one of these (SPEC §4). */
+export const ErrorCode = Object.freeze({
+  INVALID_CHALLENGE_INPUT: 'INVALID_CHALLENGE_INPUT',
+  CHALLENGE_NOT_FOUND: 'CHALLENGE_NOT_FOUND',
+  CHALLENGE_CONSUMED: 'CHALLENGE_CONSUMED',
+  CHALLENGE_EXPIRED: 'CHALLENGE_EXPIRED',
+  CHALLENGE_NOT_YET_VALID: 'CHALLENGE_NOT_YET_VALID',
+  SIGNATURE_MALFORMED: 'SIGNATURE_MALFORMED',
+  SIGNATURE_NON_CANONICAL: 'SIGNATURE_NON_CANONICAL',
+  ADDRESS_MISMATCH: 'ADDRESS_MISMATCH',
+  EVIDENCE_MISMATCH: 'EVIDENCE_MISMATCH',
+  EVIDENCE_SEAL_INVALID: 'EVIDENCE_SEAL_INVALID',
+  SCHEME_UNSUPPORTED: 'SCHEME_UNSUPPORTED',
+});
+
+export class ProofError extends Error {
+  constructor(code, message = code) {
+    super(message);
+    this.name = 'ProofError';
+    this.code = code;
+  }
+}
