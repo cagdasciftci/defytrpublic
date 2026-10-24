@@ -22,6 +22,15 @@ It proves **control** of the key at verification time, not legal ownership. See 
 | 0.2 | Jurisdiction profiles (EU, CH, UK, TR); Bitcoin BIP-322 (P2WPKH, P2TR) |
 | later | Smart-contract wallets (EIP-1271), Solana, Tron |
 
+## Demo
+
+```sh
+npm ci
+node examples/demo/server.js   # http://localhost:8787
+```
+
+One page, no build step. Pick a jurisdiction and amount, connect **MetaMask** (any chain; Sepolia is fine) or **UniSat** (Bitcoin, BIP-322), sign the challenge and see the verified, sealed evidence record and the requirement for that jurisdiction. No payment or gas is involved. The demo keeps everything in memory.
+
 ## Development
 
 ```bash

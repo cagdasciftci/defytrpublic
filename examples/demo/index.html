@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wallet control proof demo</title>
+<style>
+  :root { --bg:#f7f7f5; --card:#fff; --ink:#1d1d1b; --muted:#6b6b66; --line:#e3e3de; --accent:#2f5d50; --ok:#2f7d4f; --bad:#a33a2b; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#161615; --card:#1f1f1d; --ink:#ecece8; --muted:#a0a09a; --line:#33332f; --accent:#7fb8a4; --ok:#6fcf97; --bad:#ef8a7a; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+  section { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:18px; margin-bottom:14px; }
+  h2 { font-size:13px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin:0 0 12px; }
+  .row { display:flex; flex-wrap:wrap; gap:10px; align-items:end; }
+  label { display:flex; flex-direction:column; gap:4px; font-size:13px; color:var(--muted); }
+  select, input { font:inherit; color:var(--ink); background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:7px 9px; min-width:120px; }
+  button { font:inherit; border:0; border-radius:6px; padding:8px 14px; background:var(--accent); color:var(--card); cursor:pointer; }
+  button:disabled { opacity:.4; cursor:default; }
+  pre { white-space:pre-wrap; word-break:break-all; background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:12px; font:12.5px/1.45 ui-monospace, Menlo, monospace; margin:10px 0 0; max-height:340px; overflow:auto; }
+  .pill { display:inline-block; padding:2px 9px; border-radius:99px; border:1px solid currentColor; font-size:13px; }
+  .ok { color:var(--ok); } .bad { color:var(--bad); }
+  .muted { color:var(--muted); font-size:13px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Self-hosted wallet control proof</h1>
+  <p class="sub">A VASP asks the customer to sign one bound, single-use message. No payment, no gas. Runs locally against <code>wallet-ownership-proof</code>.</p>
+
+  <section>
+    <h2>1 · Transfer</h2>
+    <div class="row">
+      <label>Wallet<select id="chain"><option value="evm">Ethereum · MetaMask</option><option value="btc">Bitcoin · UniSat (BIP-322)</option></select></label>
+      <label>Jurisdiction<select id="jur"><option>EU</option><option>CH</option><option>UK</option><option>TR</option></select></label>
+      <label>Amount<input id="amount" value="1250" inputmode="decimal"></label>
+      <label>Currency<input id="currency" value="EUR" size="5"></label>
+      <label>Direction<select id="dir"><option>outbound</option><option>inbound</option></select></label>
+    </div>
+  </section>
+
+  <section>
+    <h2>2 · Connect and request a challenge</h2>
+    <div class="row"><button id="connect">Connect wallet</button><span id="addr" class="muted"></span></div>
+    <div id="req" class="muted" style="margin-top:10px"></div>
+    <pre id="msg" hidden></pre>
+  </section>
+
+  <section>
+    <h2>3 · Sign and verify</h2>
+    <button id="sign" disabled>Sign in wallet</button>
+    <div id="result" style="margin-top:10px"></div>
+    <pre id="evidence" hidden></pre>
+  </section>
+  <p class="muted">Control of the key at signing time, not legal ownership. Requirement summaries are not legal advice; see docs/JURISDICTIONS.md.</p>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+let state = {};
+const CURRENCY = { EU: 'EUR', UK: 'GBP', CH: 'CHF', TR: 'TRY' };
+$('jur').onchange = () => { $('currency').value = CURRENCY[$('jur').value]; };
+
+async function api(path, body) {
+  const r = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await r.json();
+  if (!r.ok) throw new Error(`${data.code}: ${data.message ?? ''}`);
+  return data;
+}
+const show = (el, text) => { el.hidden = false; el.textContent = text; };
+const fail = e => { $('result').innerHTML = `<span class="pill bad">rejected</span> <span class="muted"></span>`; $('result').lastChild.textContent = e.message; };
+
+$('connect').onclick = async () => {
+  try {
+    const chain = $('chain').value;
+    let address, chainId;
+    if (chain === 'evm') {
+      if (!window.ethereum) throw new Error('MetaMask not found');
+      [address] = await window.ethereum.request({ method: 'eth_requestAccounts' });
+      chainId = parseInt(await window.ethereum.request({ method: 'eth_chainId' }), 16);
+    } else {
+      if (!window.unisat) throw new Error('UniSat wallet not found');
+      [address] = await window.unisat.requestAccounts();
+    }
+    $('addr').textContent = address + (chainId ? ` · chain ${chainId}` : '');
+    const c = await api('/api/challenges', {
+      scheme: chain === 'evm' ? 'eip191-siwe' : 'bip322-simple', address, chainId,
+      jurisdiction: $('jur').value, amount: $('amount').value, currency: $('currency').value, direction: $('dir').value,
+    });
+    state = { chain, address, ...c };
+    const r = c.requirement;
+    $('req').textContent = `${r.jurisdiction}: ${r.requirement.replace('_', ' ')}${r.aboveThreshold === null ? '' : r.aboveThreshold ? ' (above threshold)' : ' (below threshold)'} · signed message: ${r.messageSigning.replaceAll('_', ' ')}`;
+    show($('msg'), c.message);
+    $('sign').disabled = false;
+  } catch (e) { fail(e); }
+};
+
+$('sign').onclick = async () => {
+  try {
+    let signature;
+    if (state.chain === 'evm') {
+      const hex = '0x' + Array.from(new TextEncoder().encode(state.message), b => b.toString(16).padStart(2, '0')).join('');
+      signature = await window.ethereum.request({ method: 'personal_sign', params: [hex, state.address] });
+    } else {
+      signature = await window.unisat.signMessage(state.message, 'bip322-simple');
+    }
+    const { evidence, offline } = await api('/api/verify', { challengeId: state.challengeId, signature });
+    $('result').innerHTML = `<span class="pill ok">verified</span> <span class="muted">offline re-check: signature ${offline.signatureValid ? 'valid' : 'invalid'}, issuer ${offline.issuerAttested ? 'attested' : 'not attested'}</span>`;
+    show($('evidence'), JSON.stringify(evidence, null, 2));
+    $('sign').disabled = true;
+  } catch (e) { fail(e); }
+};
+</script>
+</body>
+</html>
