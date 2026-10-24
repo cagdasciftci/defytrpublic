@@ -70,6 +70,36 @@ test('message length is the UTF-8 byte length, not the JS string length (indepen
   assert.equal(recoverPersonalSigner(NON_ASCII.message, NON_ASCII.signature), WEB3_DOC.address);
 });
 
+// Further published vectors (research/test-vectors.md §3), each re-checked with tools/independent_vectors.py.
+const PUBLISHED = [
+  {
+    source: 'ethers.js v5 docs, Wallet examples',
+    privateKey: '0x1da6847600b0ee25e9ad9a52abbd786dd2502fa4005dd5af9310b7cc7a3b25db',
+    address: '0x71CB05EE1b1F506fF321Da3dac38f25c0c9ce6E1',
+    message: 'Hello World',
+    digest: '0xa1de988600a42c4b4ab089b619297c17d53cffae5d5120d82d8a92d0bb3b78f2',
+    signature:
+      '0x14280e5885a19f60e536de50097e96e3738c7acae4e9e62d67272d794b8127d31c03d9cd59781d4ee31fb4e1b893bd9b020ec67dfa65cfb51e2bdadbb1de26d91c',
+  },
+  {
+    source: 'viem docs, signMessage',
+    privateKey: '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80',
+    address: '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266',
+    message: 'hello world',
+    signature:
+      '0xa461f509887bd19e312c0c58467ce8ff8e300d3c1a90b608a760c5b80318eaf15fe57c96f9175d6cd4daad4663763baa7e78836e067d0163e9a2ccf2ff753f5b1b',
+  },
+];
+
+test('recovers the signer of further independently published EIP-191 vectors', () => {
+  for (const v of PUBLISHED) {
+    if (v.digest) assert.equal(`0x${bytesToHex(hashPersonalMessage(v.message))}`, v.digest, v.source);
+    const pub = secp256k1.getPublicKey(hexToBytes(v.privateKey.slice(2)), false);
+    assert.equal(toChecksumAddress(`0x${bytesToHex(keccak_256(pub.subarray(1)).subarray(12))}`), v.address, `${v.source}: key → address`);
+    assert.equal(recoverPersonalSigner(v.message, v.signature), v.address, v.source);
+  }
+});
+
 test('accepts v as 27/28 and 0/1 for the same signature', () => {
   const v = hexToBytes(WEB3_DOC.signature.slice(2))[64];
   const alt = setByte(WEB3_DOC.signature, 64, v - 27);

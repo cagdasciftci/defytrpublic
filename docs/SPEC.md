@@ -1,6 +1,6 @@
 # wallet-ownership-proof — Specification (draft v0.1)
 
-Status: draft, 2026-10-23. Sections marked **[research]** are completed from `research/test-vectors.md`.
+Status: draft v0.1, updated 2026-10-24. Sources and test vectors: [`research/test-vectors.md`](../research/test-vectors.md).
 
 ## 1. Purpose
 
@@ -13,7 +13,13 @@ It produces the evidence a Travel Rule policy engine needs for its "self-hosted 
 - **Proves:** at verification time, someone holding the private key of address *A* signed a challenge that is bound to this VASP, this chain, this address, this transfer and a fresh, single-use nonce.
 - **Does not prove:** legal ownership, beneficial ownership, or that the signer is the KYC'd customer. Binding the signer to the customer is the VASP's session/KYC responsibility. The library states this limit in every evidence record (`claim: "control"`).
 
-**[research]** Regulatory basis: EU TFR (Reg. 2023/1113) and EBA Travel Rule Guidelines on verifying that a self-hosted address is owned or controlled by the customer; MASAK position on unhosted wallets.
+### Regulatory basis
+
+- **EU, Regulation (EU) 2023/1113 Art. 14(5) and 16(2):** for transfers exceeding EUR 1,000 to or from a self-hosted address, the CASP "shall take adequate measures to assess whether that address is owned or controlled by" its customer.
+- **EU, EBA Travel Rule Guidelines (EBA/GL/2024/11) para 83(d):** one listed method is "requesting the customer to digitally sign a specific message into the account and wallet software with the key corresponding to that address". At least one method is required (para 83); a combination only where one is not sufficiently reliable (para 85). The assessment happens before the transfer is initiated / funds are made available (para 79). Once satisfied, a CASP may whitelist the address (para 86) — a deployment policy, not part of this library.
+- **Türkiye, Tedbirler Yönetmeliği Art. 24/A(6):** for wallets not registered at any crypto asset service provider, the rule found is a customer **declaration** about the wallet owner; no ownership-verification method is prescribed. This library can strengthen that declaration with cryptographic evidence; it is not a Turkish legal requirement. (Text read from a commercial republisher of the Resmî Gazete; confirm against the official gazette before citing.)
+
+This is engineering analysis, not legal advice.
 
 ## 2. Scope
 
@@ -140,11 +146,11 @@ If the engine's transfer payload carries no wallet address, the caller must decl
 
 ## 8. Test plan
 
-- Official vectors **[research]**: EIP-191/SIWE positive + negative, BIP-322 from the BIP text.
+- Official and published vectors: web3.js, ethers.js and viem EIP-191 vectors plus an independent pure-Python vector (in CI); spruceid/siwe parsing and verification vectors and BIP-322 `basic-test-vectors.json` collected for v0.2.
 - Threat-model tests T1–T13 (one or more each).
 - Property test: random keys → sign → verify succeeds; any single-byte flip in message or signature → fails.
 - Integration: a policy case that requires ownership/control verification moves from manual review to allow only via a resolved proof; strict-mode test for T1.
 
 ## 9. Dependencies
 
-`@noble/curves`, `@noble/hashes` (MIT, zero dependencies, independently audited **[research]**). Why not Node.js built-ins: `crypto` provides neither keccak-256 nor secp256k1 public-key recovery **[research: confirm]**.
+`@noble/curves` 1.9.7 (MIT, one dependency: `@noble/hashes`; secp256k1 audited by Trail of Bits at v0.7.3, later modules by Kudelski Security and Cure53) and `@noble/hashes` 1.8.0 (MIT, zero dependencies; audited by Cure53 at v1.0.0). Why not Node.js built-ins: Node.js `crypto` offers SHA3-256 but not Keccak-256 (different padding), and no secp256k1 public-key recovery.
