@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { MemoryChallengeStore, reverifyEvidence, SCHEME_BIP322_SIMPLE, SCHEME_EIP191_SIWE, WalletProofService } from '../src/challenges.js';
 import { ErrorCode } from '../src/errors.js';
+import { buildBitcoinChallengeMessage } from '../src/siwe.js';
 import { p2trWallet, p2wpkhWallet } from './helpers/btc.js';
 
 const DOMAIN = 'vasp.example';
@@ -87,20 +88,36 @@ test('BIP-322 evidence: editing any bound field, or switching scheme, is detecte
     message: evidence.message.replace('inbound', 'outbound'),
   };
   for (const [field, value] of Object.entries(edits)) {
-    assert.throws(() => reverifyEvidence({ ...evidence, [field]: value }, expected), e => e instanceof Error && 'code' in e, field);
+    assert.throws(() => reverifyEvidence({ ...evidence, [field]: value }, expected), code(ErrorCode.EVIDENCE_MISMATCH), field);
   }
-  assert.throws(() => reverifyEvidence({ ...evidence, scheme: SCHEME_EIP191_SIWE, chainId: 1 }, expected), e => 'code' in e);
-  assert.throws(() => reverifyEvidence({ ...evidence, address: w.address.toUpperCase() }, expected), e => 'code' in e);
+  assert.throws(() => reverifyEvidence({ ...evidence, scheme: SCHEME_EIP191_SIWE, chainId: 1 }, expected), code(ErrorCode.EVIDENCE_MISMATCH));
+  assert.throws(() => reverifyEvidence({ ...evidence, address: w.address.toUpperCase() }, expected), code(ErrorCode.EVIDENCE_MISMATCH));
 });
 
-test('BIP-322 network binding: a proof for the mainnet address does not satisfy a testnet challenge for the same key', async () => {
+test('BIP-322 network binding: the Network line is signed; the same text with another network is rejected', async () => {
   const { service } = setup();
-  const key = new Uint8Array(32).fill(7);
-  const main = p2wpkhWallet('bc', key);
-  const test3 = p2wpkhWallet('tb', key);
-  const mainChallenge = await service.issue(btc(main.address));
-  const testChallenge = await service.issue(btc(test3.address));
-  // The bare BIP-322 signature is network-agnostic; the signed challenge text is not.
-  await assert.rejects(service.verify({ challengeId: testChallenge.challengeId, signature: main.sign(mainChallenge.message) }), code(ErrorCode.SIGNATURE_INVALID));
-  assert.equal((await service.verify({ challengeId: testChallenge.challengeId, signature: test3.sign(testChallenge.message) })).network, 'testnet');
+  const w = p2wpkhWallet('tb');
+  const { challengeId, message } = await service.issue(btc(w.address));
+  // Same key, same address, same nonce and request id: only the network line differs.
+  const otherNetwork = message.replace('Network: bitcoin:testnet', 'Network: bitcoin:mainnet');
+  assert.notEqual(otherNetwork, message);
+  await assert.rejects(service.verify({ challengeId, signature: w.sign(otherNetwork) }), code(ErrorCode.SIGNATURE_INVALID));
+  assert.equal((await service.verify({ challengeId, signature: w.sign(message) })).network, 'testnet');
+});
+
+test('Bitcoin challenge text refuses a network that contradicts the address prefix', () => {
+  const fields = {
+    domain: DOMAIN,
+    address: p2wpkhWallet('bc').address,
+    network: 'testnet',
+    nonce: 'AbCdEf0123456789XyZ012',
+    issuedAt: new Date('2026-11-01T10:00:00.000Z'),
+    expirationTime: new Date('2026-11-01T10:10:00.000Z'),
+    requestId: '11111111-1111-4111-8111-111111111111',
+    vaspId: VASP,
+    transferReference: 'transfer-btc-1',
+    direction: 'inbound',
+  };
+  assert.throws(() => buildBitcoinChallengeMessage(fields), code(ErrorCode.INVALID_CHALLENGE_INPUT));
+  assert.match(buildBitcoinChallengeMessage({ ...fields, network: 'mainnet' }), /Network: bitcoin:mainnet/);
 });

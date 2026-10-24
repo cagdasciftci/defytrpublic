@@ -267,7 +267,7 @@ test('official generated error vectors: all 28 are rejected with a typed code; s
       err => {
         if (!Object.values(ErrorCode).includes(err.code)) return false;
         if (/(p2wpkh|p2tr) simple/.test(e.description)) return [ErrorCode.SIGNATURE_INVALID, ErrorCode.ADDRESS_MISMATCH].includes(err.code);
-        return true;
+        return err.code === ErrorCode.SCHEME_UNSUPPORTED; // P2WSH, full variant, legacy addresses
       },
       e.description,
     );

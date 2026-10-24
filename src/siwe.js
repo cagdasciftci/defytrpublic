@@ -68,7 +68,7 @@ export function buildSiweMessage(fields) {
 }
 
 const BTC_ADDRESS_RE = /^(?:bc|tb|bcrt)1[02-9ac-hj-np-z]{6,87}$/;
-const BTC_NETWORKS = new Set(['mainnet', 'testnet', 'regtest']);
+const BTC_HRP_NETWORK = Object.freeze({ bc: 'mainnet', tb: 'testnet', bcrt: 'regtest' });
 
 /**
  * Render the Bitcoin challenge text signed with BIP-322 (SPEC §3). Same bound fields as the EVM
@@ -79,6 +79,7 @@ export function buildBitcoinChallengeMessage(fields) {
   const f = fields ?? {};
   const { issued, expires } = validateCommon(f);
   if (typeof f.address !== 'string' || !BTC_ADDRESS_RE.test(f.address)) fail('address');
-  if (!BTC_NETWORKS.has(f.network)) fail('network');
+  // The network must be the one the address prefix names; BIP-322 itself does not sign it.
+  if (BTC_HRP_NETWORK[f.address.slice(0, f.address.lastIndexOf('1'))] !== f.network) fail('network');
   return [`${f.domain} wants you to prove control of this Bitcoin address:`, f.address, ...tail(f, issued, expires, `Network: bitcoin:${f.network}`)].join('\n');
 }

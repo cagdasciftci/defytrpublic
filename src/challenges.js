@@ -267,7 +267,14 @@ export function reverifyEvidence(evidence, { domain, vaspId, evidenceKey } = {})
   }
   parseTime(evidence.issuedAt);
   parseTime(evidence.expirationTime);
-  const rebuilt = renderChallenge(evidence);
+  let rebuilt;
+  try {
+    rebuilt = renderChallenge(evidence);
+  } catch (e) {
+    // A record whose fields cannot form a valid challenge was not produced by this verifier.
+    if (e instanceof ProofError && e.code === ErrorCode.INVALID_CHALLENGE_INPUT) throw new ProofError(ErrorCode.EVIDENCE_MISMATCH, 'evidence fields do not form a valid challenge');
+    throw e;
+  }
   if (rebuilt !== evidence.message) {
     throw new ProofError(ErrorCode.EVIDENCE_MISMATCH, 'evidence fields do not match the signed message');
   }
