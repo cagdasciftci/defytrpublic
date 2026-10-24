@@ -1,3 +1,4 @@
+export * from './bip322.js';
 export * from './challenges.js';
 export * from './errors.js';
 export * from './evm.js';
