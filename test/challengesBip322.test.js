@@ -92,3 +92,15 @@ test('BIP-322 evidence: editing any bound field, or switching scheme, is detecte
   assert.throws(() => reverifyEvidence({ ...evidence, scheme: SCHEME_EIP191_SIWE, chainId: 1 }, expected), e => 'code' in e);
   assert.throws(() => reverifyEvidence({ ...evidence, address: w.address.toUpperCase() }, expected), e => 'code' in e);
 });
+
+test('BIP-322 network binding: a proof for the mainnet address does not satisfy a testnet challenge for the same key', async () => {
+  const { service } = setup();
+  const key = new Uint8Array(32).fill(7);
+  const main = p2wpkhWallet('bc', key);
+  const test3 = p2wpkhWallet('tb', key);
+  const mainChallenge = await service.issue(btc(main.address));
+  const testChallenge = await service.issue(btc(test3.address));
+  // The bare BIP-322 signature is network-agnostic; the signed challenge text is not.
+  await assert.rejects(service.verify({ challengeId: testChallenge.challengeId, signature: main.sign(mainChallenge.message) }), code(ErrorCode.SIGNATURE_INVALID));
+  assert.equal((await service.verify({ challengeId: testChallenge.challengeId, signature: test3.sign(testChallenge.message) })).network, 'testnet');
+});

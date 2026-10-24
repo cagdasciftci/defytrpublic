@@ -194,7 +194,7 @@ The BIP page (`bip-0322.mediawiki`) **no longer lists the vectors inline**. Its 
 
 The values below come from `github.com/bitcoin/bips/blob/master/bip-0322/basic-test-vectors.json`.
 
-> **Important:** in the current file, every "simple" signature carries a 3-character ASCII prefix, `smp` (and the "full" variant appears to use `ful`, per error case 8). The older BIP text published the "" signature as `AkcwRAIg...` with no prefix. This means the spec revision now in master has added signature-type prefixes. Before choosing fixtures, decide which revision the library targets. The "No prefix fallback" P2TR vector suggests that unprefixed signatures are still accepted. That reading is an inference: UNVERIFIED.
+> **Important:** in the current file, every "simple" signature carries a 3-character ASCII prefix: `smp` for simple, `ful` for full, `pof` for proof of funds. The older BIP text published the "" signature as `AkcwRAIg...` with no prefix. Accepting unprefixed signatures as simple is allowed by the current text (`bip-0322.mediawiki`, lines 96–99: a verifier "might assume the simple variant in the absence of a prefix"), so this library accepts both. `ful` and `pof` return `SCHEME_UNSUPPORTED`. `generated-test-vectors.json` (4 simple, 10 full, 3 proof-of-funds, 28 error) has since been opened; the simple and error sets are in `test/fixtures/bip322-generated.json`.
 
 ### Key and address
 

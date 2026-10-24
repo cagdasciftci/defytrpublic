@@ -8,8 +8,9 @@ import { ErrorCode, ProofError } from './errors.js';
  *   - P2WPKH (bc1q…, 20-byte program), ECDSA, SIGHASH_ALL, BIP-143 sighash
  *   - P2TR key-path (bc1p…), BIP-340 Schnorr, SIGHASH_DEFAULT or SIGHASH_ALL, BIP-341 sighash
  * Everything else fails closed with SCHEME_UNSUPPORTED: legacy (1…/3…) addresses, P2WSH,
- * Taproot script-path spends, and the "full" variant (`ful` prefix).
- * Signatures are accepted with the `smp` prefix used by the current BIP text and without it (older wallets).
+ * Taproot script-path spends, and the "full" and "proof of funds" variants (`ful`, `pof` prefixes).
+ * Signatures are accepted with the `smp` prefix and without any prefix; the current BIP text allows a
+ * verifier to assume the simple variant when no prefix is present.
  */
 
 const N = secp256k1.CURVE.n;
@@ -115,11 +116,15 @@ export const bip322ToSignTxid = toSpendTxid => dsha(concat(zeros(4), Uint8Array.
 
 // ---------- signature decoding ----------
 const malformed = why => new ProofError(ErrorCode.SIGNATURE_MALFORMED, `malformed BIP-322 signature: ${why}`);
+const MAX_SIGNATURE_LENGTH = 4096;
 const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 
 function decodeBase64(text) {
   if (!BASE64.test(text)) throw malformed('base64');
-  return Uint8Array.from(Buffer.from(text, 'base64'));
+  const bytes = Buffer.from(text, 'base64');
+  // Canonical encoding only, so one witness has exactly one accepted signature string.
+  if (bytes.toString('base64') !== text) throw malformed('non-canonical base64');
+  return Uint8Array.from(bytes);
 }
 
 function parseWitness(bytes) {
@@ -143,7 +148,10 @@ function parseWitness(bytes) {
 /** Strip the variant prefix and decode the witness stack. */
 export function decodeBip322Signature(signature) {
   if (typeof signature !== 'string' || signature.length === 0) throw malformed('empty');
-  if (signature.startsWith('ful')) throw new ProofError(ErrorCode.SCHEME_UNSUPPORTED, 'BIP-322 full variant is not supported');
+  if (signature.length > MAX_SIGNATURE_LENGTH) throw malformed('too long');
+  if (signature.startsWith('ful') || signature.startsWith('pof')) {
+    throw new ProofError(ErrorCode.SCHEME_UNSUPPORTED, 'BIP-322 full and proof-of-funds variants are not supported');
+  }
   const body = signature.startsWith('smp') ? signature.slice(3) : signature;
   return parseWitness(decodeBase64(body));
 }
@@ -155,7 +163,7 @@ function parseStrictDer(der) {
   };
   if (der.length < 8 || der.length > 72 || der[0] !== 0x30 || der[1] !== der.length - 2) fail();
   const readInt = at => {
-    if (der[at] !== 0x02) fail();
+    if (at + 2 > der.length || der[at] !== 0x02) fail();
     const len = der[at + 1];
     if (len === 0 || at + 2 + len > der.length) fail();
     const v = der.subarray(at + 2, at + 2 + len);
@@ -173,7 +181,7 @@ function parseStrictDer(der) {
 const invalid = () => new ProofError(ErrorCode.SIGNATURE_INVALID, 'BIP-322 signature does not verify');
 
 function verifyP2wpkh(program, witness, txid) {
-  if (witness.length !== 2) throw new ProofError(ErrorCode.SCHEME_UNSUPPORTED, 'P2WPKH witness must have exactly two items');
+  if (witness.length !== 2) throw malformed('P2WPKH witness must have exactly two items');
   const [sigWithType, pubkey] = witness;
   if (sigWithType.length < 9 || sigWithType[sigWithType.length - 1] !== 0x01) throw malformed('P2WPKH requires SIGHASH_ALL');
   if (pubkey.length !== 33 || (pubkey[0] !== 0x02 && pubkey[0] !== 0x03)) throw malformed('compressed public key required');
@@ -226,9 +234,17 @@ function verifyP2trKeyPath(program, spk, witness, txid) {
 /**
  * Verify a BIP-322 simple signature. Returns { address, network, type } on success; throws ProofError otherwise.
  * The returned address is lower-case (bech32 canonical form).
+ *
+ * `network` is derived from the address prefix (bc/tb/bcrt), which BIP-322 does NOT sign: the same
+ * signature verifies for bc1q<prog>, tb1q<prog> and bcrt1q<prog>. Bind the network in the signed text
+ * (WalletProofService does, via buildBitcoinChallengeMessage) if it matters.
  */
-export function verifyBip322Simple({ address, message, signature }) {
-  if (typeof message !== 'string') throw new ProofError(ErrorCode.INVALID_CHALLENGE_INPUT, 'message must be a string');
+export function verifyBip322Simple(args = {}) {
+  if (!args || typeof args !== 'object') throw new ProofError(ErrorCode.INVALID_CHALLENGE_INPUT, 'expected { address, message, signature }');
+  const { address, message, signature } = args;
+  if (typeof message !== 'string' || !message.isWellFormed()) {
+    throw new ProofError(ErrorCode.INVALID_CHALLENGE_INPUT, 'message must be a well-formed string');
+  }
   const decoded = decodeSegwitAddress(address);
   const witness = decodeBip322Signature(signature);
   const spk = scriptPubKey(decoded);

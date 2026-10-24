@@ -68,10 +68,12 @@ export function p2trWallet(hrp = 'bc', key = secp256k1.utils.randomPrivateKey())
   const spk = cat([0x51, 32], xOnly);
   return {
     address,
-    sign(message) {
+    /** `hashType` 0x00 (SIGHASH_DEFAULT, 64-byte signature) or 0x01 (SIGHASH_ALL, 65 bytes). */
+    sign(message, { hashType = 0x00 } = {}) {
       const op = cat(bip322ToSpendTxid(message, spk), z(4));
-      const m = taggedHash('TapSighash', cat([0, 0], z(8), sha256(op), sha256(z(8)), sha256(cat([spk.length], spk)), sha256(z(4)), sha256(OUT), [0], z(4)));
-      return witness([schnorr.sign(m, key)]);
+      const m = taggedHash('TapSighash', cat([0, hashType], z(8), sha256(op), sha256(z(8)), sha256(cat([spk.length], spk)), sha256(z(4)), sha256(OUT), [0], z(4)));
+      const sig = schnorr.sign(m, key);
+      return witness([hashType === 0x00 ? sig : cat(sig, [hashType])]);
     },
   };
 }

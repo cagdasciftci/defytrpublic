@@ -6,6 +6,8 @@ import { sha256 } from '@noble/hashes/sha2';
 import { bytesToHex } from '@noble/hashes/utils';
 import { bip322MessageHash, bip322ToSignTxid, bip322ToSpendTxid, decodeSegwitAddress, taggedHash, verifyBip322Simple } from '../src/bip322.js';
 import { ErrorCode } from '../src/errors.js';
+import { p2trWallet } from './helpers/btc.js';
+import GENERATED from './fixtures/bip322-generated.json' with { type: 'json' };
 
 // Official vectors: bitcoin/bips bip-0322/basic-test-vectors.json (research/test-vectors.md §2),
 // re-checked by tools/bip322_reference.py (independent pure-Python implementation).
@@ -115,7 +117,8 @@ test('P2WPKH strictness: high-s, non-SIGHASH_ALL, uncompressed key and non-stric
   assert.throws(() => verifyBip322Simple({ address: P2WPKH, message: '', signature: sig(padded, 1, pub) }), code(ErrorCode.SIGNATURE_MALFORMED));
   const uncompressed = secp256k1.ProjectivePoint.fromHex(pub).toRawBytes(false);
   assert.throws(() => verifyBip322Simple({ address: P2WPKH, message: '', signature: sig(der, 1, uncompressed) }), code(ErrorCode.SIGNATURE_MALFORMED));
-  assert.throws(() => verifyBip322Simple({ address: P2WPKH, message: '', signature: `${SIGS[0][1]}AA==` }), code(ErrorCode.SIGNATURE_MALFORMED));
+  const trailing = Buffer.concat([witness, Buffer.from([0])]).toString('base64');
+  assert.throws(() => verifyBip322Simple({ address: P2WPKH, message: '', signature: `smp${trailing}` }), e => e.code === ErrorCode.SIGNATURE_MALFORMED && /trailing/.test(e.message));
 });
 
 test('property: fresh P2WPKH and P2TR keys round-trip; any flipped signature or message bit fails', () => {
@@ -137,12 +140,12 @@ test('property: fresh P2WPKH and P2TR keys round-trip; any flipped signature or 
     assert.equal(verifyBip322Simple({ address: tr, message, signature: tSig }).type, 'p2tr');
 
     const msgFlip = message.slice(0, -1) + String.fromCharCode(message.charCodeAt(message.length - 1) ^ 1);
-    assert.throws(() => verifyBip322Simple({ address: wpkh, message: msgFlip, signature: wSig }));
-    assert.throws(() => verifyBip322Simple({ address: tr, message: msgFlip, signature: tSig }));
+    assert.throws(() => verifyBip322Simple({ address: wpkh, message: msgFlip, signature: wSig }), code(ErrorCode.SIGNATURE_INVALID));
+    assert.throws(() => verifyBip322Simple({ address: tr, message: msgFlip, signature: tSig }), code(ErrorCode.SIGNATURE_INVALID));
 
     const raw = Buffer.from(tSig, 'base64');
     raw[2 + (i % 64)] ^= 1 << (i % 8);
-    assert.throws(() => verifyBip322Simple({ address: tr, message, signature: raw.toString('base64') }));
+    assert.throws(() => verifyBip322Simple({ address: tr, message, signature: raw.toString('base64') }), code(ErrorCode.SIGNATURE_INVALID));
   }
 });
 
@@ -205,3 +208,98 @@ function p2trSighash(txid, spk) {
   const op = cat(txid, z(4));
   return taggedHash('TapSighash', cat([0, 0], z(8), sha256(op), sha256(z(8)), sha256(cat([spk.length], spk)), sha256(z(4)), sha256(OUT), [0], z(4)));
 }
+
+test('review fix: a DER signature whose r length ends one byte early is SIGNATURE_MALFORMED, not a crash', () => {
+  const signature = 'smpAgkwBgIDAQEBAgEhAgEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB';
+  assert.throws(() => verifyBip322Simple({ address: P2WPKH, message: 'x', signature }), code(ErrorCode.SIGNATURE_MALFORMED));
+});
+
+test('review fixes: pof prefix, non-canonical base64, oversize input, bad arguments, lone surrogates, witness count', () => {
+  assert.throws(() => verifyBip322Simple({ address: P2WPKH, message: '', signature: 'pofAA==' }), code(ErrorCode.SCHEME_UNSUPPORTED));
+  const sig = SIGS[0][1];
+  assert.ok(sig.endsWith('I='));
+  assert.throws(() => verifyBip322Simple({ address: P2WPKH, message: '', signature: `${sig.slice(0, -2)}J=` }), e => e.code === ErrorCode.SIGNATURE_MALFORMED && /non-canonical/.test(e.message));
+  assert.throws(() => verifyBip322Simple({ address: P2WPKH, message: '', signature: `smp${'A'.repeat(4096)}` }), e => e.code === ErrorCode.SIGNATURE_MALFORMED && /too long/.test(e.message));
+  for (const bad of [undefined, null, 'x', 42]) {
+    assert.throws(() => verifyBip322Simple(bad), code(ErrorCode.INVALID_CHALLENGE_INPUT), String(bad));
+  }
+  for (const message of ['a\uD800', 'a\uDC00', 42]) {
+    assert.throws(() => verifyBip322Simple({ address: P2WPKH, message, signature: sig }), code(ErrorCode.INVALID_CHALLENGE_INPUT));
+  }
+  const oneItem = Buffer.from([1, 1, 0]).toString('base64');
+  assert.throws(() => verifyBip322Simple({ address: P2WPKH, message: '', signature: oneItem }), code(ErrorCode.SIGNATURE_MALFORMED));
+});
+
+test('P2TR: 65-byte SIGHASH_ALL signatures verify; other 65-byte forms and an appended 0x01 do not', () => {
+  const w = p2trWallet();
+  const message = 'taproot sighash all';
+  assert.equal(verifyBip322Simple({ address: w.address, message, signature: w.sign(message, { hashType: 0x01 }) }).type, 'p2tr');
+
+  const def = Buffer.from(w.sign(message), 'base64'); // [1, 64, sig64]
+  const with65 = last => Buffer.from([1, 65, ...def.subarray(2), last]).toString('base64');
+  assert.throws(() => verifyBip322Simple({ address: w.address, message, signature: with65(0x00) }), code(ErrorCode.SIGNATURE_MALFORMED));
+  assert.throws(() => verifyBip322Simple({ address: w.address, message, signature: with65(0x02) }), code(ErrorCode.SIGNATURE_MALFORMED));
+  // A valid SIGHASH_DEFAULT signature with 0x01 appended commits to a different digest.
+  assert.throws(() => verifyBip322Simple({ address: w.address, message, signature: with65(0x01) }), code(ErrorCode.SIGNATURE_INVALID));
+  const all = Buffer.from(w.sign(message, { hashType: 0x01 }), 'base64');
+  const stripped = Buffer.from([1, 64, ...all.subarray(2, 66)]).toString('base64');
+  assert.throws(() => verifyBip322Simple({ address: w.address, message, signature: stripped }), code(ErrorCode.SIGNATURE_INVALID));
+});
+
+test('official generated vectors: P2WPKH and P2TR verify, P2WSH fails closed', () => {
+  assert.equal(GENERATED.simple.length, 4);
+  for (const v of GENERATED.simple) {
+    for (const signature of v.bip322_signatures) {
+      if (v.type === 'p2wpkh' || v.type === 'p2tr') {
+        assert.equal(verifyBip322Simple({ address: v.address, message: v.message, signature }).type, v.type);
+      } else {
+        assert.throws(() => verifyBip322Simple({ address: v.address, message: v.message, signature }), code(ErrorCode.SCHEME_UNSUPPORTED), v.type);
+      }
+    }
+  }
+});
+
+test('official generated error vectors: all 28 are rejected with a typed code; simple P2WPKH/P2TR ones as SIGNATURE_INVALID or ADDRESS_MISMATCH', () => {
+  assert.equal(GENERATED.error.length, 28);
+  for (const e of GENERATED.error) {
+    assert.throws(
+      () => verifyBip322Simple({ address: e.address, message: e.message, signature: e.signature }),
+      err => {
+        if (!Object.values(ErrorCode).includes(err.code)) return false;
+        if (/(p2wpkh|p2tr) simple/.test(e.description)) return [ErrorCode.SIGNATURE_INVALID, ErrorCode.ADDRESS_MISMATCH].includes(err.code);
+        return true;
+      },
+      e.description,
+    );
+  }
+});
+
+test('BIP-350 address vectors: valid ones decode to the listed scriptPubKey; invalid ones are rejected', () => {
+  const VALID = {
+    BC1QW508D6QEJXTDG4Y5R3ZARVARY0C5XW7KV8F3T4: '0014751e76e8199196d454941c45d1b3a323f1433bd6',
+    BC1SW50QGDZ25J: '6002751e',
+    bc1zw508d6qejxtdg4y5r3zarvaryvaxxpcs: '5210751e76e8199196d454941c45d1b3a323',
+  };
+  for (const [a, hex] of Object.entries(VALID)) {
+    const { version, program } = decodeSegwitAddress(a);
+    assert.equal(bytesToHex(Uint8Array.from([version === 0 ? 0 : 0x50 + version, program.length, ...program])), hex, a);
+  }
+  const INVALID = [
+    'tc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vq5zuyut',
+    'bc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqh2y7hd',
+    'tb1z0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqglt7rf',
+    'BC1S0XLXVLHEMJA6C4DQV22UAPCTQUPFHLXM9H8Z3K2E72Q4K9HCZ7VQ54WELL',
+    'bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kemeawh',
+    'tb1q0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vq24jc47',
+    'bc1p38j9r5y49hruaue7wxjce0updqjuyyx0kh56v8s25huc6995vvpql3jow4',
+    'BC130XLXVLHEMJA6C4DQV22UAPCTQUPFHLXM9H8Z3K2E72Q4K9HCZ7VQ7ZWS8R',
+    'bc1pw5dgrnzv',
+    'bc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7v8n0nx0muaewav253zgeav',
+    'BC1QR508D6QEJXTDG4Y5R3ZARVARYV98GJ9P',
+    'tb1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vq47Zagq',
+    'bc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7v07qwwzcrf',
+    'tb1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vpggkg4j',
+    'bc1gmk9yu',
+  ];
+  for (const a of INVALID) assert.throws(() => decodeSegwitAddress(a), code(ErrorCode.ADDRESS_INVALID), a);
+});
