@@ -12,14 +12,14 @@ EU Travel Rule rules require a VASP to assess whether a self-hosted address is o
 2. The customer signs it in their own wallet. Nothing is paid; no transaction is broadcast.
 3. The library verifies the signature and emits a self-contained **evidence record** an auditor can re-verify offline.
 
-It proves **control** of the key at verification time, not legal ownership. See [docs/SPEC.md](docs/SPEC.md) for the threat model and the exact limits.
+It proves **control** of the key at verification time, not legal ownership. See [docs/SPEC.md](docs/SPEC.md) for the threat model and the exact limits, and [docs/JURISDICTIONS.md](docs/JURISDICTIONS.md) for what the EU, Swiss, UK and Turkish texts require.
 
 ## Roadmap
 
 | Version | Scope |
 | --- | --- |
 | 0.1 | EVM externally-owned accounts: EIP-4361 challenge, EIP-191 verification, replay and malleability protection, official test vectors |
-| 0.2 | Bitcoin BIP-322 (P2WPKH, P2TR), evidence provenance |
+| 0.2 | Jurisdiction profiles (EU, CH, UK, TR); Bitcoin BIP-322 (P2WPKH, P2TR) |
 | later | Smart-contract wallets (EIP-1271), Solana, Tron |
 
 ## Development
