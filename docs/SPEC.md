@@ -29,7 +29,7 @@ This is engineering analysis, not legal advice.
 | --- | --- | --- |
 | v0.1 | EVM EOA: EIP-191 `personal_sign` over an EIP-4361 (SIWE) message | Phase 1 |
 | v0.2 | Bitcoin: BIP-322 simple (P2WPKH; P2TR key-path), `smp`-prefixed or unprefixed; jurisdiction profiles (EU, CH, UK, TR) | Verifier done; challenge-service wiring next. `ful` variant, P2WSH, script-path, legacy BIP-137 → `SCHEME_UNSUPPORTED` |
-| later | EVM smart-contract wallets (EIP-1271 via public RPC), Solana ed25519, Tron, micro-payment ("satoshi") test | Out of scope until requested |
+| later | EVM smart-contract wallets (EIP-1271 via public RPC), Solana ed25519, Tron, micro-payment ("satoshi") test ([design note](MICRO_PAYMENT.md)) | Out of scope until requested |
 
 Non-goals: holding keys, broadcasting transactions, custody, price feeds, KYC.
 
