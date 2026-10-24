@@ -18,6 +18,37 @@ function isoUtc(date, field) {
   return date.toISOString();
 }
 
+function validateCommon(fields) {
+  const { domain, nonce, issuedAt, expirationTime, requestId, vaspId, transferReference, direction } = fields;
+  if (typeof domain !== 'string' || !DOMAIN_RE.test(domain)) fail('domain');
+  if (!isValidNonce(nonce)) fail('nonce');
+  if (typeof requestId !== 'string' || !UUID_RE.test(requestId)) fail('requestId');
+  if (typeof vaspId !== 'string' || !URN_SAFE_RE.test(vaspId)) fail('vaspId');
+  if (typeof transferReference !== 'string' || !URN_SAFE_RE.test(transferReference)) fail('transferReference');
+  if (direction !== 'inbound' && direction !== 'outbound') fail('direction');
+  const issued = isoUtc(issuedAt, 'issuedAt');
+  const expires = isoUtc(expirationTime, 'expirationTime');
+  if (expirationTime.getTime() <= issuedAt.getTime()) fail('expirationTime');
+  return { issued, expires };
+}
+
+const tail = ({ domain, nonce, requestId, vaspId, transferReference, direction }, issued, expires, networkLine) => [
+  '',
+  STATEMENT,
+  '',
+  `URI: https://${domain}/travel-rule/wallet-proof`,
+  'Version: 1',
+  networkLine,
+  `Nonce: ${nonce}`,
+  `Issued At: ${issued}`,
+  `Expiration Time: ${expires}`,
+  `Request ID: ${requestId}`,
+  'Resources:',
+  `- urn:travel-rule:vasp:${vaspId}`,
+  `- urn:travel-rule:transfer:${transferReference}`,
+  `- urn:travel-rule:direction:${direction}`,
+];
+
 /**
  * Render the EIP-4361 (Sign-In with Ethereum) message that binds a wallet-control proof
  * to one VASP, chain, address, transfer and single-use nonce (SPEC §3).
@@ -29,48 +60,25 @@ function isoUtc(date, field) {
  * done by the EVM verifier module before calling this function).
  */
 export function buildSiweMessage(fields) {
-  const {
-    domain,
-    address,
-    chainId,
-    nonce,
-    issuedAt,
-    expirationTime,
-    requestId,
-    vaspId,
-    transferReference,
-    direction,
-  } = fields ?? {};
+  const f = fields ?? {};
+  const { issued, expires } = validateCommon(f);
+  if (typeof f.address !== 'string' || !ADDRESS_RE.test(f.address)) fail('address');
+  if (!Number.isSafeInteger(f.chainId) || f.chainId < 1) fail('chainId');
+  return [`${f.domain} wants you to sign in with your Ethereum account:`, f.address, ...tail(f, issued, expires, `Chain ID: ${f.chainId}`)].join('\n');
+}
 
-  if (typeof domain !== 'string' || !DOMAIN_RE.test(domain)) fail('domain');
-  if (typeof address !== 'string' || !ADDRESS_RE.test(address)) fail('address');
-  if (!Number.isSafeInteger(chainId) || chainId < 1) fail('chainId');
-  if (!isValidNonce(nonce)) fail('nonce');
-  if (typeof requestId !== 'string' || !UUID_RE.test(requestId)) fail('requestId');
-  if (typeof vaspId !== 'string' || !URN_SAFE_RE.test(vaspId)) fail('vaspId');
-  if (typeof transferReference !== 'string' || !URN_SAFE_RE.test(transferReference)) fail('transferReference');
-  if (direction !== 'inbound' && direction !== 'outbound') fail('direction');
+const BTC_ADDRESS_RE = /^(?:bc|tb|bcrt)1[02-9ac-hj-np-z]{6,87}$/;
+const BTC_NETWORKS = new Set(['mainnet', 'testnet', 'regtest']);
 
-  const issued = isoUtc(issuedAt, 'issuedAt');
-  const expires = isoUtc(expirationTime, 'expirationTime');
-  if (expirationTime.getTime() <= issuedAt.getTime()) fail('expirationTime');
-
-  return [
-    `${domain} wants you to sign in with your Ethereum account:`,
-    address,
-    '',
-    STATEMENT,
-    '',
-    `URI: https://${domain}/travel-rule/wallet-proof`,
-    'Version: 1',
-    `Chain ID: ${chainId}`,
-    `Nonce: ${nonce}`,
-    `Issued At: ${issued}`,
-    `Expiration Time: ${expires}`,
-    `Request ID: ${requestId}`,
-    'Resources:',
-    `- urn:travel-rule:vasp:${vaspId}`,
-    `- urn:travel-rule:transfer:${transferReference}`,
-    `- urn:travel-rule:direction:${direction}`,
-  ].join('\n');
+/**
+ * Render the Bitcoin challenge text signed with BIP-322 (SPEC §3). Same bound fields as the EVM
+ * message; `Network` replaces `Chain ID`. `address` must be a lower-case segwit address that the
+ * caller has already decoded and checksum-validated.
+ */
+export function buildBitcoinChallengeMessage(fields) {
+  const f = fields ?? {};
+  const { issued, expires } = validateCommon(f);
+  if (typeof f.address !== 'string' || !BTC_ADDRESS_RE.test(f.address)) fail('address');
+  if (!BTC_NETWORKS.has(f.network)) fail('network');
+  return [`${f.domain} wants you to prove control of this Bitcoin address:`, f.address, ...tail(f, issued, expires, `Network: bitcoin:${f.network}`)].join('\n');
 }

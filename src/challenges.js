@@ -1,11 +1,14 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+import { decodeSegwitAddress, verifyBip322Simple } from './bip322.js';
 import { ErrorCode, ProofError } from './errors.js';
 import { isContractWalletSignature, toChecksumAddress, verifyPersonalSignature } from './evm.js';
 import { generateNonce } from './nonce.js';
-import { buildSiweMessage } from './siwe.js';
+import { buildBitcoinChallengeMessage, buildSiweMessage } from './siwe.js';
 
-export const VERIFIER_VERSION = '0.1.0';
+export const VERIFIER_VERSION = '0.2.0';
 export const SCHEME_EIP191_SIWE = 'eip191-siwe';
+export const SCHEME_BIP322_SIMPLE = 'bip322-simple';
+const SCHEMES = new Set([SCHEME_EIP191_SIWE, SCHEME_BIP322_SIMPLE]);
 const DEFAULT_TTL_MS = 10 * 60 * 1000;
 const DEFAULT_SKEW_MS = 60 * 1000;
 
@@ -81,10 +84,9 @@ function assertKey(key) {
 
 /** Render the signed text from the bound fields. Used at issue, verify and offline re-verify time. */
 function renderChallenge(c) {
-  return buildSiweMessage({
+  const fields = {
     domain: c.domain,
     address: c.address,
-    chainId: c.chainId,
     nonce: c.nonce,
     issuedAt: new Date(c.issuedAt),
     expirationTime: new Date(c.expirationTime),
@@ -92,7 +94,33 @@ function renderChallenge(c) {
     vaspId: c.vaspId,
     transferReference: c.transferReference,
     direction: c.direction,
-  });
+  };
+  if (c.scheme === SCHEME_BIP322_SIMPLE) return buildBitcoinChallengeMessage({ ...fields, network: c.network });
+  return buildSiweMessage({ ...fields, chainId: c.chainId });
+}
+
+/** Check the signature for the scheme; returns the canonical signer address or throws ProofError. */
+function verifySignature(c, message, signature) {
+  if (c.scheme === SCHEME_BIP322_SIMPLE) {
+    return verifyBip322Simple({ address: c.address, message, signature }).address;
+  }
+  return verifyPersonalSignature({ message, signature, expectedAddress: c.address });
+}
+
+/** Resolve the scheme-specific bound fields for a new challenge. */
+function bindAddress({ scheme, address, chainId, network }) {
+  if (scheme === SCHEME_EIP191_SIWE) return { address: toChecksumAddress(address), chainId };
+  if (scheme === SCHEME_BIP322_SIMPLE) {
+    const d = decodeSegwitAddress(address);
+    if (!((d.version === 0 && d.program.length === 20) || (d.version === 1 && d.program.length === 32))) {
+      throw new ProofError(ErrorCode.SCHEME_UNSUPPORTED, 'only P2WPKH and P2TR key-path addresses are supported');
+    }
+    if (network !== undefined && network !== d.network) {
+      throw new ProofError(ErrorCode.INVALID_CHALLENGE_INPUT, `address is on ${d.network}, not ${String(network)}`);
+    }
+    return { address: address.toLowerCase(), network: d.network };
+  }
+  throw new ProofError(ErrorCode.SCHEME_UNSUPPORTED, `unknown scheme: ${String(scheme)}`);
 }
 
 /**
@@ -129,16 +157,19 @@ export class WalletProofService {
     this.#clock = clock;
   }
 
-  /** Create a challenge for one address, chain and transfer. The returned `message` is what the wallet signs. */
-  async issue({ address, chainId, transferReference, direction }) {
+  /**
+   * Create a challenge for one address, chain and transfer. The returned `message` is what the wallet signs.
+   * EVM (default): `{ address, chainId }`. Bitcoin: `{ scheme: SCHEME_BIP322_SIMPLE, address, network? }`;
+   * the network is taken from the address prefix and, if given, must match.
+   */
+  async issue({ scheme = SCHEME_EIP191_SIWE, address, chainId, network, transferReference, direction }) {
     const issuedAt = this.#clock();
     const challenge = {
       challengeId: randomUUID(),
-      scheme: SCHEME_EIP191_SIWE,
+      scheme,
       domain: this.#domain,
       vaspId: this.#vaspId,
-      address: toChecksumAddress(address),
-      chainId,
+      ...bindAddress({ scheme, address, chainId, network }),
       transferReference,
       direction,
       nonce: generateNonce(),
@@ -158,7 +189,7 @@ export class WalletProofService {
   async verify({ challengeId, signature }) {
     const challenge = await this.#store.get(challengeId);
     if (!challenge) throw new ProofError(ErrorCode.CHALLENGE_NOT_FOUND);
-    if (challenge.scheme !== SCHEME_EIP191_SIWE) throw new ProofError(ErrorCode.SCHEME_UNSUPPORTED);
+    if (!SCHEMES.has(challenge.scheme)) throw new ProofError(ErrorCode.SCHEME_UNSUPPORTED);
     // Tenant isolation: a shared store must not let one VASP's service verify another's challenge.
     if (challenge.domain !== this.#domain || challenge.vaspId !== this.#vaspId) throw new ProofError(ErrorCode.CHALLENGE_NOT_FOUND);
     if (challenge.state !== 'issued') throw new ProofError(ErrorCode.CHALLENGE_CONSUMED);
@@ -169,13 +200,13 @@ export class WalletProofService {
     if (now.getTime() >= expiresAt) throw new ProofError(ErrorCode.CHALLENGE_EXPIRED);
     if (now.getTime() < issuedAt - this.#skewMs) throw new ProofError(ErrorCode.CHALLENGE_NOT_YET_VALID);
 
-    if (isContractWalletSignature(signature)) {
+    if (challenge.scheme === SCHEME_EIP191_SIWE && isContractWalletSignature(signature)) {
       // EIP-1271 / ERC-6492 need an on-chain call; v0.1 fails closed instead of guessing (T11).
       throw new ProofError(ErrorCode.SCHEME_UNSUPPORTED, 'contract-wallet signatures are not supported in v0.1');
     }
 
     const message = renderChallenge(challenge);
-    const recovered = verifyPersonalSignature({ message, signature, expectedAddress: challenge.address });
+    const recovered = verifySignature(challenge, message, signature);
 
     // Consume only after the signature checks out (a bad signature cannot burn a challenge). The
     // store re-checks expiry at commit time, so a slow store cannot consume an expired challenge.
@@ -194,7 +225,7 @@ export class WalletProofService {
       domain: challenge.domain,
       vaspId: challenge.vaspId,
       address: recovered,
-      chainId: challenge.chainId,
+      ...(challenge.scheme === SCHEME_BIP322_SIMPLE ? { network: challenge.network } : { chainId: challenge.chainId }),
       transferReference: challenge.transferReference,
       direction: challenge.direction,
       challengeId,
@@ -226,7 +257,7 @@ export class WalletProofService {
  *   i.e. it was produced by this VASP's own verifier. Pass `evidenceKey` to require this.
  */
 export function reverifyEvidence(evidence, { domain, vaspId, evidenceKey } = {}) {
-  if (evidence?.scheme !== SCHEME_EIP191_SIWE) throw new ProofError(ErrorCode.SCHEME_UNSUPPORTED);
+  if (!SCHEMES.has(evidence?.scheme)) throw new ProofError(ErrorCode.SCHEME_UNSUPPORTED);
   if (typeof domain !== 'string' || typeof vaspId !== 'string') throw new TypeError('expected { domain, vaspId }');
   if (evidence.domain !== domain || evidence.vaspId !== vaspId) {
     throw new ProofError(ErrorCode.EVIDENCE_MISMATCH, 'evidence was issued for a different domain or VASP');
@@ -240,7 +271,9 @@ export function reverifyEvidence(evidence, { domain, vaspId, evidenceKey } = {})
   if (rebuilt !== evidence.message) {
     throw new ProofError(ErrorCode.EVIDENCE_MISMATCH, 'evidence fields do not match the signed message');
   }
-  verifyPersonalSignature({ message: rebuilt, signature: evidence.signature, expectedAddress: evidence.address });
+  if (verifySignature(evidence, rebuilt, evidence.signature) !== evidence.address) {
+    throw new ProofError(ErrorCode.EVIDENCE_MISMATCH, 'evidence address is not in canonical form');
+  }
 
   let issuerAttested = false;
   if (evidenceKey !== undefined) {
