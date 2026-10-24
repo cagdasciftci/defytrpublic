@@ -19,6 +19,8 @@ It produces the evidence a Travel Rule policy engine needs for its "self-hosted 
 - **EU, EBA Travel Rule Guidelines (EBA/GL/2024/11) para 83(d):** one listed method is "requesting the customer to digitally sign a specific message into the account and wallet software with the key corresponding to that address". At least one method is required (para 83); a combination only where one is not sufficiently reliable (para 85). The assessment happens before the transfer is initiated / funds are made available (para 79). Once satisfied, a CASP may whitelist the address (para 86) — a deployment policy, not part of this library.
 - **Türkiye, Tedbirler Yönetmeliği Art. 24/A(6):** for wallets not registered at any crypto asset service provider, the rule found is a customer **declaration** about the wallet owner; no ownership-verification method is prescribed. This library can strengthen that declaration with cryptographic evidence; it is not a Turkish legal requirement. (Text read from a commercial republisher of the Resmî Gazete; confirm against the official gazette before citing.)
 
+Switzerland (FINMA Guidance 02/2019) and the UK (MLR 2017 reg. 64G) are covered in [JURISDICTIONS.md](JURISDICTIONS.md), which also has the machine-readable profiles exported as `selfHostedRequirement`.
+
 This is engineering analysis, not legal advice.
 
 ## 2. Scope
@@ -26,7 +28,7 @@ This is engineering analysis, not legal advice.
 | Version | Chains / schemes | Notes |
 | --- | --- | --- |
 | v0.1 | EVM EOA: EIP-191 `personal_sign` over an EIP-4361 (SIWE) message | Phase 1 |
-| v0.2 | Bitcoin: BIP-322 simple (P2WPKH, P2TR); legacy BIP-137 read-only | Phase 2 |
+| v0.2 | Bitcoin: BIP-322 simple (P2WPKH; P2TR key-path), `smp`-prefixed or unprefixed; jurisdiction profiles (EU, CH, UK, TR) | Verifier done; challenge-service wiring next. `ful` variant, P2WSH, script-path, legacy BIP-137 → `SCHEME_UNSUPPORTED` |
 | later | EVM smart-contract wallets (EIP-1271 via public RPC), Solana ed25519, Tron, micro-payment ("satoshi") test | Out of scope until requested |
 
 Non-goals: holding keys, broadcasting transactions, custody, price feeds, KYC.
@@ -146,11 +148,11 @@ If the engine's transfer payload carries no wallet address, the caller must decl
 
 ## 8. Test plan
 
-- Official and published vectors: web3.js, ethers.js and viem EIP-191 vectors plus an independent pure-Python vector (in CI); spruceid/siwe parsing and verification vectors and BIP-322 `basic-test-vectors.json` collected for v0.2.
+- Official and published vectors: web3.js, ethers.js and viem EIP-191 vectors plus an independent pure-Python vector (in CI); BIP-322 `basic-test-vectors.json` (message hashes, `to_spend`/`to_sign` txids, P2WPKH and P2TR signatures, error cases) in CI and in the independent Python reference `tools/bip322_reference.py`; spruceid/siwe vectors collected.
 - Threat-model tests T1–T13 (one or more each).
 - Property test: random keys → sign → verify succeeds; any single-byte flip in message or signature → fails.
 - Integration: a policy case that requires ownership/control verification moves from manual review to allow only via a resolved proof; strict-mode test for T1.
 
 ## 9. Dependencies
 
-`@noble/curves` 1.9.7 (MIT, one dependency: `@noble/hashes`; secp256k1 audited by Trail of Bits at v0.7.3, later modules by Kudelski Security and Cure53) and `@noble/hashes` 1.8.0 (MIT, zero dependencies; audited by Cure53 at v1.0.0). Why not Node.js built-ins: Node.js `crypto` offers SHA3-256 but not Keccak-256 (different padding), and no secp256k1 public-key recovery.
+`@noble/curves` 1.9.7 (MIT, one dependency: `@noble/hashes`; secp256k1 audited by Trail of Bits at v0.7.3, later modules by Kudelski Security and Cure53) and `@noble/hashes` 1.8.0 (MIT, zero dependencies; audited by Cure53 at v1.0.0). Why not Node.js built-ins: Node.js `crypto` offers SHA3-256 but not Keccak-256 (different padding), and no secp256k1 public-key recovery. The BIP-322 path additionally uses `ripemd160` (`@noble/hashes/legacy`) and BIP-340 `schnorr`; Node.js `crypto` does provide RIPEMD-160; the noble version is used so all hashing comes from one audited, pinned source.
